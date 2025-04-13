@@ -3,11 +3,15 @@
 
 #define MQ135_SENSOR_PIN 12
 
+#define buzzer
+
 struct Settings {
   bool enableDebugging = false;
+  bool enableBuzzer = true;
   float calibrationValue = 0;
-  float airClassificationWarningValStart = 15.0;
-  float airClassificationCriticalValStart = 20.0;
+  float airClassificationWarningValStart = 22.0;
+  float airClassificationCriticalValStart = 30.0;
+  unsigned int calibrationTime = 0;
 } settings;
 
 enum AirQualityClassification {
@@ -20,9 +24,18 @@ class AirQualityReading {
 private:
   float airQualReadingsArr[10];
   float airQualValue = 0;
-public:
   AirQualityClassification status = NORMAL;
 
+  uint8_t setIAQClassification(float value) {
+    if (value >= settings.airClassificationWarningValStart && value < settings.airClassificationCriticalValStart)
+      status = WARNING;
+    else if (value >= settings.airClassificationCriticalValStart)
+      status = CRITICAL;
+    else status = NORMAL;
+
+    return status;
+  }
+public:
   void addIAQValue(float value) {
     int arraySize = (int)sizeof(airQualReadingsArr) / sizeof(airQualReadingsArr[0]);
 
@@ -65,10 +78,10 @@ public:
       }
     }
 
-    float medianData;
-
     if ((arraySize - numofZeros) % 2 == 0) airQualValue = (float)(arrangedTempReadArr[numofZeros + ((arraySize - numofZeros) / 2)] + arrangedTempReadArr[(numofZeros + ((arraySize - numofZeros) / 2) - 1)]) / 2;
     else airQualValue = (float)arrangedTempReadArr[numofZeros + ((arraySize - numofZeros) / 2)];
+
+    setIAQClassification(airQualValue);
 
     /* DEBUGGING */
     if (settings.enableDebugging) {
@@ -81,13 +94,7 @@ public:
     return airQualValue;
   }
 
-  uint8_t setIAQClassification(float value) {
-    if(value >= settings.airClassificationWarningValStart && value < settings.airClassificationCriticalValStart)
-      status = WARNING;
-    else if (value >= settings.airClassificationCriticalValStart)
-      status = CRITICAL;
-    else status = NORMAL;
-
+  uint8_t getStatus() {
     return status;
   }
 };
@@ -99,19 +106,27 @@ AirQualityReading sensor;
 void setup() {
   Serial.begin(115200);
 
+  pinMode(18, OUTPUT);
+
   u8x8.begin();
   u8x8.setPowerSave(0);
   u8x8.setFont(u8x8_font_chroma48medium8_r);
 
   Serial.println("Hello World!");
+
+  // digitalWrite(18, HIGH);
 }
 
-unsigned long long displaySensorValueTimeout = millis() + 1000;
-unsigned long long readSensorTimeout = millis() + 500;
+unsigned long long displaySensorValueTimeout = millis() + 500;
+unsigned long long readSensorTimeout = millis() + 250;
 unsigned long long refreshOLEDDisplay = millis() + 15000;
 
 unsigned long long flashingTimeout = millis() + 1000;
-bool isStatusNotNormal = false;
+
+
+unsigned long long beepTimeout = 0;
+unsigned int beepInterval = 100;
+bool beep = false;
 
 void loop() {
 
@@ -119,11 +134,11 @@ void loop() {
     char displayBuf[16];
     char statusBuf[10];
 
-    if (sensor.status == NORMAL) strncpy(statusBuf, "NORMAL", 10);
-    if(sensor.status == WARNING) strncpy(statusBuf, "WARNING", 10);
-    else if(sensor.status == CRITICAL) strncpy(statusBuf, "CRITICAL", 10);
+    if (sensor.getStatus() == NORMAL) strncpy(statusBuf, "NORMAL", 10);
+    if (sensor.getStatus() == WARNING) strncpy(statusBuf, "WARNING", 10);
+    else if (sensor.getStatus() == CRITICAL) strncpy(statusBuf, "CRITICAL", 10);
 
-    if(millis() > refreshOLEDDisplay) {
+    if (millis() > refreshOLEDDisplay) {
       u8x8.clearLine(1);
       u8x8.clearLine(2);
       u8x8.clearLine(7);
@@ -133,7 +148,7 @@ void loop() {
 
     float sensorValue = sensor.getIAQReading();
 
-    Serial.printf("[Sensor] Sensor Value: %.2f\n", sensorValue);
+    Serial.printf("[Sensor] IAQ Value: %.2f ppm\n", sensorValue);
 
     sprintf(displayBuf, "%.1f", sensorValue);
 
@@ -145,23 +160,34 @@ void loop() {
     memset(displayBuf, 0, 16);
 
     // sprintf(displayBuf, "Status: %s", statusBuf);
-    
+
+    // if (beep) digitalWrite(18, HIGH);
+    // else digitalWrite(18, LOW);
+
     u8x8.drawString(0, 6, "Status: ");
     u8x8.drawString(0, 7, statusBuf);
 
     u8x8.setInverseFont(0);
 
 
-    displaySensorValueTimeout = millis() + 1000;
+    displaySensorValueTimeout = millis() + 250;
   }
 
   if (millis() > readSensorTimeout) {
     float sensorValue = (float)analogRead(MQ135_SENSOR_PIN);
 
     sensor.addIAQValue(sensorValue);
-    if(sensor.setIAQClassification(sensorValue) != NORMAL) isStatusNotNormal = true;
-    else isStatusNotNormal = false;
+    // if (sensor.getStatus() != NORMAL) isStatusNotNormal = true;
+    // else isStatusNotNormal = false;
 
     readSensorTimeout = millis() + 500;
   }
+
+  if (sensor.getStatus() != NORMAL) {
+    if (millis() - beepTimeout >= beepInterval) {
+      beepTimeout = millis();
+      beep = !beep;
+      digitalWrite(18, beep);
+    }
+  } else beep = true;
 }
